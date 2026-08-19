@@ -115,10 +115,10 @@ def annals_total():
         return None
 
 
-def line(t, rec):
+def line(n, t, rec):
     via = f" (via `{rec['pid']}`)" if rec["pid"] != t else ""
     return (
-        f"- `{t}`{via}: [#{rec['issue']}]({ISSUES}/{rec['issue']})"
+        f"{n}. `{t}`{via}: [#{rec['issue']}]({ISSUES}/{rec['issue']})"
         f" — {rec['model']} ({rec['user']}), {rec['solved_at'].replace('T', ' ').replace('Z', ' UTC')}"
     )
 
@@ -172,8 +172,11 @@ def main():
         plural = "s" if len(rows) > 1 else ""
         header = f"New AnnalsChallenge first solve{plural} ({len(solves)}{denom} now solved):"
 
-    order = sorted(rows, key=lambda p: (rows[p]["solved_at"], rows[p]["issue"]))
-    content = "\n".join([header] + [line(p, rows[p]) for p in order])
+    # Number by position in the overall solve order, so an announcement of the
+    # 15th solve says 15 rather than restarting at 1.
+    order = sorted(solves, key=lambda p: (solves[p]["solved_at"], solves[p]["issue"]))
+    position = {p: i for i, p in enumerate(order, 1)}
+    content = "\n".join([header] + [line(position[p], p, rows[p]) for p in order if p in rows])
     if args.dry_run:
         print(content)
         return
