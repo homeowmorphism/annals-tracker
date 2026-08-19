@@ -1,0 +1,39 @@
+name: AnnalsChallenge tracker
+
+on:
+  schedule:
+    - cron: '17 */2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: tracker
+  cancel-in-progress: false
+
+jobs:
+  track:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Announce new solves
+        env:
+          ZULIP_SITE: ${{ secrets.ZULIP_SITE }}
+          ZULIP_CHANNEL: ${{ secrets.ZULIP_CHANNEL }}
+          ZULIP_TOPIC: ${{ secrets.ZULIP_TOPIC }}
+          ZULIP_BOT_EMAIL: ${{ secrets.ZULIP_BOT_EMAIL }}
+          ZULIP_API_KEY: ${{ secrets.ZULIP_API_KEY }}
+          ANNALS_WORKDIR: ${{ github.workspace }}
+        run: python3 annals_zulip.py
+
+      - name: Persist announcement state
+        run: |
+          git config user.name annals-tracker
+          git config user.email annals-tracker@users.noreply.github.com
+          git add state.json
+          git diff --cached --quiet && exit 0
+          git commit -m "state: record newly announced solves"
+          git pull --rebase
+          git push
