@@ -24,6 +24,9 @@ jobs:
           ZULIP_SITE: ${{ secrets.ZULIP_SITE }}
           ZULIP_CHANNEL: ${{ secrets.ZULIP_CHANNEL }}
           ZULIP_TOPIC: ${{ secrets.ZULIP_TOPIC }}
+          # Optional second destination; unset means post to the first only.
+          ZULIP_CHANNEL_2: ${{ secrets.ZULIP_CHANNEL_2 }}
+          ZULIP_TOPIC_2: ${{ secrets.ZULIP_TOPIC_2 }}
           ZULIP_BOT_EMAIL: ${{ secrets.ZULIP_BOT_EMAIL }}
           ZULIP_API_KEY: ${{ secrets.ZULIP_API_KEY }}
           ANNALS_WORKDIR: ${{ github.workspace }}

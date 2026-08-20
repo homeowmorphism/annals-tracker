@@ -1,7 +1,7 @@
 # AnnalsChallenge tracker
 
 Announces first accepted [lean-eval](https://github.com/leanprover/lean-eval)
-solutions of AnnalsChallenge problems to a Zulip topic.
+solutions of AnnalsChallenge problems to one or more Zulip topics.
 
 A scheduled GitHub Action runs `annals_zulip.py` every five minutes.
 GitHub throttles frequent schedules, so runs can land later than that. The
@@ -30,9 +30,11 @@ python3 annals_zulip.py --all --dry-run
 The first run shallow-clones the submissions repo (about 2 MB) into
 `~/.cache/annals-zulip`. Later runs just pull it.
 
-`--dry-run` on its own usually prints nothing, because the committed
-`state.json` already lists the solves announced so far. Use `--all` to see
-the formatting.
+The output is grouped by destination. With nothing configured the script
+cannot tell which topic you mean, so it shows the full table. Once you have
+configured one, a plain `--dry-run` usually reports `nothing new`, because
+`state.json` already lists what that topic has seen. `--all` shows the full
+table either way.
 
 ## Posting for real
 
@@ -63,28 +65,47 @@ way to check the credentials.
 Real environment variables take precedence over that file, which is how the
 GitHub Action supplies them. Export all five yourself if you prefer.
 
+## Posting to more than one topic
+
+`ZULIP_CHANNEL_2` and `ZULIP_TOPIC_2` add a second destination, `_3` a third,
+and so on. The script stops looking at the first gap in the numbering.
+
+```sh
+export ZULIP_CHANNEL_2='a second channel'
+export ZULIP_TOPIC_2='the topic within it'
+python3 annals_zulip.py
+```
+
+A topic that `state.json` has not seen before gets the full table of every
+first solve, and only new ones after that. Adding a destination catches it up
+on its own; there is no separate seeding step.
+
+Subscribe the bot to every channel you add.
+
 ## Starting a fresh tracker
 
-`state.json` in this repo is seeded with the solves already announced to the
-original topic. Pointing the tracker at a new channel means deciding what
-that topic should see first.
+A new topic is caught up with the full table by itself, which is usually what
+you want. The two commands here cover the cases where it is not.
 
 To announce nothing historical, record every current solve as already
-announced. Only future solves get posted:
+announced. This writes an entry for each configured destination, so only
+future solves get posted anywhere:
 
 ```sh
 python3 annals_zulip.py --mark-announced
 ```
 
-To post the full table as a baseline instead, use `--all`. It posts every
-first solve and marks all of them announced, so ordinary runs afterwards pick
-up only what is new.
+`--all` does the opposite. It posts the full table to every destination and
+marks all of it announced, which is how to re-post the baseline to a topic
+that already has one.
 
 ## Running it on GitHub Actions
 
 1. Fork this repo.
 2. Under **Settings → Secrets and variables → Actions**, add the five
-   settings above as repository secrets, under the same names.
+   settings above as repository secrets, under the same names. Add
+   `ZULIP_CHANNEL_2` and `ZULIP_TOPIC_2` as well for a second topic; the
+   workflow already passes them through when they exist.
 3. Open the **Actions** tab and enable workflows. Forks start with them
    disabled.
 4. Run **AnnalsChallenge tracker** manually once from the Actions tab to
@@ -116,13 +137,20 @@ ANNALS_WORKDIR=$PWD python3 annals_zulip.py --dry-run
 That clones the submissions repo into `lean-eval-submissions/` here, which
 `.gitignore` already covers, and reads the committed `state.json`.
 
+The file records, per destination, the issue number announced for each
+problem.
+
+Renaming a channel or topic produces a new key, and the renamed topic then
+gets the full table again. Rename its key in `state.json` in the same commit
+to avoid that.
+
 ## Commands
 
 | Command | Effect |
 | --- | --- |
-| `annals_zulip.py` | Post first solves not yet announced, then record them |
-| `annals_zulip.py --all` | Post the full table of first solves, then record them |
-| `annals_zulip.py --mark-announced` | Record current solves as announced, post nothing |
+| `annals_zulip.py` | Post the first solves each topic has not seen, then record them |
+| `annals_zulip.py --all` | Post the full table to every topic, then record it |
+| `annals_zulip.py --mark-announced` | Record current solves as announced everywhere, post nothing |
 | `annals_zulip.py --dry-run` | Print instead of posting; needs no credentials |
 
 `--dry-run` combines with `--all`. It never writes `state.json`.

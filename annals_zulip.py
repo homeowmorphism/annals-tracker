@@ -3,12 +3,13 @@
 
 Each run pulls leanprover/lean-eval-submissions, computes the first accepted
 submission for every annals_* problem, and announces the ones it hasn't
-announced before. Announced solves are remembered in a state file, so the
-script is safe to run from cron.
+announced before. Announced solves are remembered per destination in a state
+file, so the script is safe to run from cron.
 
 ZULIP_SITE, ZULIP_CHANNEL, ZULIP_TOPIC, ZULIP_BOT_EMAIL, and ZULIP_API_KEY
 come from the environment (e.g. GitHub Actions secrets) or from
 ~/.config/annals-zulip.env, which an interactive run offers to create.
+ZULIP_CHANNEL_2 and ZULIP_TOPIC_2 (then _3, and so on) add more destinations.
 
 Usage:
   annals_zulip.py                   announce new first solves
@@ -36,10 +37,12 @@ CONFIG_PATH = Path.home() / ".config" / "annals-zulip.env"
 REQUIRED = ["ZULIP_SITE", "ZULIP_CHANNEL", "ZULIP_TOPIC", "ZULIP_BOT_EMAIL", "ZULIP_API_KEY"]
 
 
-def load_config():
+def load_config(interactive=True):
     """Fill os.environ from the config file, prompting interactively for gaps.
 
-    Real environment variables win over the file. All five settings are required.
+    Real environment variables win over the file. All five settings are
+    required to post; a dry run passes interactive=False and makes do with
+    whatever happens to be set.
     """
     if CONFIG_PATH.exists():
         for line in CONFIG_PATH.read_text().splitlines():
@@ -48,7 +51,7 @@ def load_config():
                 k, _, v = line.partition("=")
                 os.environ.setdefault(k.strip(), v.strip().strip('"'))
     missing = [k for k in REQUIRED if not os.environ.get(k)]
-    if not missing:
+    if not missing or not interactive:
         return
     if not sys.stdin.isatty():
         sys.exit(f"missing {', '.join(missing)}; set them in the environment or run once interactively")
@@ -60,6 +63,39 @@ def load_config():
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     CONFIG_PATH.write_text("".join(f"{k}={os.environ[k]}\n" for k in REQUIRED))
     CONFIG_PATH.chmod(0o600)
+
+
+def destinations():
+    """Every channel and topic to post to, in order.
+
+    ZULIP_CHANNEL/ZULIP_TOPIC is the first; ZULIP_CHANNEL_2/ZULIP_TOPIC_2,
+    then _3, and so on add more. A dry run without any configuration falls
+    back to a placeholder, which has announced nothing and so shows the full
+    table.
+    """
+    dests = [(os.environ.get("ZULIP_CHANNEL", "(unset)"), os.environ.get("ZULIP_TOPIC", "(unset)"))]
+    n = 2
+    while (channel := os.environ.get(f"ZULIP_CHANNEL_{n}")) and (topic := os.environ.get(f"ZULIP_TOPIC_{n}")):
+        dests.append((channel, topic))
+        n += 1
+    return dests
+
+
+def name(dest):
+    """How a destination is labelled in the state file and in run output."""
+    return f"{dest[0]} > {dest[1]}"
+
+
+def read_state(path, primary):
+    """Announced issue numbers per destination: {"channel > topic": {problem: issue}}."""
+    if not path.exists():
+        return {}
+    state = json.loads(path.read_text())
+    # Before the tracker posted to more than one topic, the file was a single
+    # flat {problem: issue} map. That history belongs to the first destination.
+    if any(isinstance(v, int) for v in state.values()):
+        return {name(primary): state}
+    return state
 
 
 # One AnnalsChallenge theorem predates the Aug 2026 import under an
@@ -123,13 +159,13 @@ def line(n, t, rec):
     )
 
 
-def post(content: str):
+def post(content: str, channel: str, topic: str):
     site = os.environ["ZULIP_SITE"].rstrip("/")
     auth = f"{os.environ['ZULIP_BOT_EMAIL']}:{os.environ['ZULIP_API_KEY']}"
     body = urllib.parse.urlencode({
         "type": "stream",
-        "to": os.environ["ZULIP_CHANNEL"],
-        "topic": os.environ["ZULIP_TOPIC"],
+        "to": channel,
+        "topic": topic,
         "content": content,
     }).encode()
     req = urllib.request.Request(f"{site}/api/v1/messages", data=body)
@@ -148,41 +184,52 @@ def main():
     ap.add_argument("--dry-run", action="store_true", help="print instead of posting")
     args = ap.parse_args()
 
-    if not args.dry_run:
-        load_config()
+    load_config(interactive=not args.dry_run)
+    dests = destinations()
     solves = first_solves(sync_repo())
     state_path = WORKDIR / "state.json"
-    announced = json.loads(state_path.read_text()) if state_path.exists() else {}
+    state = read_state(state_path, dests[0])
 
     if args.mark_announced:
-        announced.update({p: solves[p]["issue"] for p in solves})
-        state_path.write_text(json.dumps(announced, indent=1, sort_keys=True))
-        print(f"marked {len(solves)} solves as announced; nothing posted")
+        for d in dests:
+            state[name(d)] = {p: solves[p]["issue"] for p in solves}
+        state_path.write_text(json.dumps(state, indent=1, sort_keys=True))
+        print(f"marked {len(solves)} solves as announced for {len(dests)} destination(s); nothing posted")
         return
 
     total = annals_total()
     denom = f"/{total}" if total else ""
-    if args.all:
-        header = f"First accepted submission per solved AnnalsChallenge problem ({len(solves)}{denom}):"
-        rows = {p: solves[p] for p in solves}
-    else:
-        rows = {p: r for p, r in solves.items() if p not in announced}
-        if not rows:
-            return
-        plural = "s" if len(rows) > 1 else ""
-        header = f"New AnnalsChallenge first solve{plural} ({len(solves)}{denom} now solved):"
-
     # Number by position in the overall solve order, so an announcement of the
     # 15th solve says 15 rather than restarting at 1.
     order = sorted(solves, key=lambda p: (solves[p]["solved_at"], solves[p]["issue"]))
     position = {p: i for i, p in enumerate(order, 1)}
-    content = "\n".join([header] + [line(position[p], p, rows[p]) for p in order if p in rows])
-    if args.dry_run:
-        print(content)
-        return
-    post(content)
-    announced.update({p: rows[p]["issue"] for p in rows})
-    state_path.write_text(json.dumps(announced, indent=1, sort_keys=True))
+
+    posted = False
+    for d in dests:
+        announced = state.get(name(d))
+        # A destination the state file has never heard of is caught up with the
+        # full table, so adding one posts the backlog once and new solves after.
+        if args.all or announced is None:
+            rows = dict(solves)
+            header = f"First accepted submission per solved AnnalsChallenge problem ({len(solves)}{denom}):"
+        else:
+            rows = {p: r for p, r in solves.items() if p not in announced}
+            plural = "s" if len(rows) > 1 else ""
+            header = f"New AnnalsChallenge first solve{plural} ({len(solves)}{denom} now solved):"
+        if not rows:
+            if args.dry_run:
+                print(f"[{name(d)}] nothing new")
+            continue
+        content = "\n".join([header] + [line(position[p], p, rows[p]) for p in order if p in rows])
+        if args.dry_run:
+            print(f"[{name(d)}]\n{content}")
+            continue
+        post(content, *d)
+        state[name(d)] = {**(announced or {}), **{p: rows[p]["issue"] for p in rows}}
+        posted = True
+        print(f"posted {len(rows)} solve(s) to {name(d)}")
+    if posted:
+        state_path.write_text(json.dumps(state, indent=1, sort_keys=True))
 
 
 if __name__ == "__main__":
