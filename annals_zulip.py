@@ -117,27 +117,45 @@ def sync_repo() -> Path:
     return repo
 
 
+def records(fname, data):
+    """Every submission in a results file as (pid, solved_at, issue, model).
+
+    Upstream is migrating from schema 1 (per-model nesting) to schema 2 (flat
+    append-only list, docs/results-schema-v2.md there); readers must accept
+    both. issue is None for a v2 server intake, which has no issue number.
+    """
+    v = data.get("schema_version")
+    if v == 1:
+        for model, probs in data["solved"].items():
+            for pid, rec in probs.items():
+                yield pid, rec["solved_at"], rec["issue_number"], model
+    elif v == 2:
+        for rec in data["results"]:
+            yield rec["problem_id"], rec["accepted_at"], rec["intake"].get("issue_number"), rec["declared_model"]
+    else:
+        sys.exit(f"{fname}: unexpected schema_version {v}")
+
+
 def first_solves(repo: Path) -> dict:
     """Earliest accepted submission per AnnalsChallenge target, ties broken by issue number."""
     best = {}
     for f in (repo / "results").glob("*.json"):
         data = json.loads(f.read_text())
-        if data.get("schema_version") != 1:
-            sys.exit(f"{f.name}: unexpected schema_version {data.get('schema_version')}")
-        for model, probs in data["solved"].items():
-            for pid, rec in probs.items():
-                t = target(pid)
-                if t is None:
-                    continue
-                key = (rec["solved_at"], rec["issue_number"])
-                if t not in best or key < (best[t]["solved_at"], best[t]["issue"]):
-                    best[t] = {
-                        "solved_at": rec["solved_at"],
-                        "issue": rec["issue_number"],
-                        "model": model,
-                        "user": data["user"],
-                        "pid": pid,
-                    }
+        for pid, solved_at, issue, model in records(f.name, data):
+            t = target(pid)
+            if t is None:
+                continue
+            if issue is None:
+                sys.exit(f"{f.name}: {pid} came in without an issue number; teach the tracker about server intakes")
+            key = (solved_at, issue)
+            if t not in best or key < (best[t]["solved_at"], best[t]["issue"]):
+                best[t] = {
+                    "solved_at": solved_at,
+                    "issue": issue,
+                    "model": model,
+                    "user": data["user"],
+                    "pid": pid,
+                }
     return best
 
 
