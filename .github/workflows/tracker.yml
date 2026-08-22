@@ -33,12 +33,15 @@ jobs:
         run: python3 annals_zulip.py
 
       - name: Persist announcement state
+        # Runs even when the tracker fails: an unreadable-upstream alert
+        # records itself in state.json so it isn't re-posted every 5 minutes.
+        if: always()
         run: |
           git config user.name annals-tracker
           git config user.email annals-tracker@users.noreply.github.com
           git add state.json
           if ! git diff --cached --quiet; then
-            git commit -m "state: record newly announced solves"
+            git commit -m "state: record announced solves or alerts"
           elif [ $(( ( $(date +%s) - $(git log -1 --format=%ct) ) / 86400 )) -ge 30 ]; then
             # A public repo's scheduled workflows are disabled after 60 quiet
             # days. Solves are sparse, so keep the clock from running out.

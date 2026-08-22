@@ -117,12 +117,18 @@ def sync_repo() -> Path:
     return repo
 
 
-def records(fname, data):
+class Unsupported(Exception):
+    """A results file the parser doesn't understand yet."""
+
+
+def records(data):
     """Every submission in a results file as (pid, solved_at, issue, model).
 
     Upstream is migrating from schema 1 (per-model nesting) to schema 2 (flat
     append-only list, docs/results-schema-v2.md there); readers must accept
-    both. issue is None for a v2 server intake, which has no issue number.
+    both. Raises Unsupported for any other version, and for a v2 server
+    intake of an AnnalsChallenge problem, which has no issue number to link
+    or tie-break with.
     """
     v = data.get("schema_version")
     if v == 1:
@@ -131,22 +137,36 @@ def records(fname, data):
                 yield pid, rec["solved_at"], rec["issue_number"], model
     elif v == 2:
         for rec in data["results"]:
-            yield rec["problem_id"], rec["accepted_at"], rec["intake"].get("issue_number"), rec["declared_model"]
+            pid = rec["problem_id"]
+            issue = rec["intake"].get("issue_number")
+            if issue is None:
+                if target(pid) is None:
+                    continue
+                raise Unsupported(f"{pid} has no issue number ({rec['intake']['kind']} intake)")
+            yield pid, rec["accepted_at"], issue, rec["declared_model"]
     else:
-        sys.exit(f"{fname}: unexpected schema_version {v}")
+        raise Unsupported(f"unexpected schema_version {v}")
 
 
-def first_solves(repo: Path) -> dict:
-    """Earliest accepted submission per AnnalsChallenge target, ties broken by issue number."""
-    best = {}
-    for f in (repo / "results").glob("*.json"):
+def first_solves(repo: Path):
+    """Earliest accepted submission per AnnalsChallenge target, ties broken by
+    issue number, plus the files the parser had to skip.
+
+    A skipped file may hold an unseen first solve, so on any skip the caller
+    must withhold announcements rather than risk crowning the wrong solver.
+    """
+    best, skipped = {}, []
+    for f in sorted((repo / "results").glob("*.json")):
         data = json.loads(f.read_text())
-        for pid, solved_at, issue, model in records(f.name, data):
+        try:
+            recs = list(records(data))
+        except Unsupported as e:
+            skipped.append(f"{f.name}: {e}")
+            continue
+        for pid, solved_at, issue, model in recs:
             t = target(pid)
             if t is None:
                 continue
-            if issue is None:
-                sys.exit(f"{f.name}: {pid} came in without an issue number; teach the tracker about server intakes")
             key = (solved_at, issue)
             if t not in best or key < (best[t]["solved_at"], best[t]["issue"]):
                 best[t] = {
@@ -156,7 +176,7 @@ def first_solves(repo: Path) -> dict:
                     "user": data["user"],
                     "pid": pid,
                 }
-    return best
+    return best, skipped
 
 
 def annals_total():
@@ -204,9 +224,31 @@ def main():
 
     load_config(interactive=not args.dry_run)
     dests = destinations()
-    solves = first_solves(sync_repo())
+    solves, skipped = first_solves(sync_repo())
     state_path = WORKDIR / "state.json"
     state = read_state(state_path, dests[0])
+
+    # Upstream data the parser can't read yet: hold announcements (the
+    # unreadable part may contain the true first solve, and a wrong
+    # announcement would stick), tell the primary topic once per distinct
+    # breakage, and fail the run until the parser is taught the new format.
+    if skipped:
+        if state.get("skipped alert") != skipped:
+            content = ("⚠️ I can't read part of the upstream results data, so announcements "
+                       "are on hold until my parser is updated:\n"
+                       + "\n".join(f"- `{s}`" for s in skipped))
+            if run_id := os.environ.get("GITHUB_RUN_ID"):
+                content += f"\n[failing run](https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{run_id})"
+            if args.dry_run:
+                print(f"[{name(dests[0])}]\n{content}")
+            else:
+                post(content, *dests[0])
+                state["skipped alert"] = skipped
+                state_path.write_text(json.dumps(state, indent=1, sort_keys=True))
+        sys.exit("\n".join(skipped))
+    if not args.dry_run and state.pop("skipped alert", None) is not None:
+        # Breakage fixed; a later one should alert afresh.
+        state_path.write_text(json.dumps(state, indent=1, sort_keys=True))
 
     if args.mark_announced:
         for d in dests:
