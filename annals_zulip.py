@@ -107,7 +107,7 @@ ALIASES = {"duffin_schaeffer": "annals_duffin_schaeffer_conjecture"}
 GAG_CHANNEL = "Formal Landmarks"
 GAG_POSITION = 27
 GAG = ("I have stopped the count on special request. Nah just kidding."
-       " The singularity takeover is incoming:")
+       " The singularity takeover is incoming, and here's the 27th:")
 
 
 def target(pid):
