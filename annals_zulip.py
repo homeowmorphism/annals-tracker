@@ -106,7 +106,8 @@ ALIASES = {"duffin_schaeffer": "annals_duffin_schaeffer_conjecture"}
 # carries the 27th solve opens with a fake-out before the usual message.
 GAG_CHANNEL = "Formal Landmarks"
 GAG_POSITION = 27
-GAG = "I have stopped the count on special request. Nah just kidding, here's the 27th:"
+GAG = ("I have stopped the count on special request. Nah just kidding."
+       " The singularity takeover is incoming:")
 
 
 def target(pid):

@@ -87,7 +87,7 @@ Subscribe the bot to every channel you add.
 By request, the announcement that carries the 27th solve opens with an extra
 line in the **Formal Landmarks** channel, before the usual message:
 
-> I have stopped the count on special request. Nah just kidding, here's the 27th:
+> I have stopped the count on special request. Nah just kidding. The singularity takeover is incoming:
 
 `GAG_CHANNEL`, `GAG_POSITION` and `GAG` near the top of the script control
 it. Delete them and the two lines that use them once the joke has run.
