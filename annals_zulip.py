@@ -102,6 +102,12 @@ def read_state(path, primary):
 # unprefixed id; a solve of either problem settles the same target.
 ALIASES = {"duffin_schaeffer": "annals_duffin_schaeffer_conjecture"}
 
+# A one-off gag for the Formal Landmarks channel: the announcement that
+# carries the 27th solve opens with a fake-out before the usual message.
+GAG_CHANNEL = "Formal Landmarks"
+GAG_POSITION = 27
+GAG = "I have stopped the count on special request. Nah just kidding, here's the 27th:"
+
 
 def target(pid):
     return pid if pid.startswith("annals_") else ALIASES.get(pid)
@@ -269,7 +275,8 @@ def main():
         announced = state.get(name(d))
         # A destination the state file has never heard of is caught up with the
         # full table, so adding one posts the backlog once and new solves after.
-        if args.all or announced is None:
+        full = args.all or announced is None
+        if full:
             rows = dict(solves)
             header = f"First accepted submission per solved AnnalsChallenge problem ({len(solves)}{denom}):"
         else:
@@ -281,6 +288,10 @@ def main():
                 print(f"[{name(d)}] nothing new")
             continue
         content = "\n".join([header] + [line(position[p], p, rows[p]) for p in order if p in rows])
+        # The gag lands on the announcement of the 27th solve only; a full
+        # table isn't "here's the 27th", so it stays plain.
+        if not full and d[0] == GAG_CHANNEL and any(position[p] == GAG_POSITION for p in rows):
+            content = f"{GAG}\n\n{content}"
         if args.dry_run:
             print(f"[{name(d)}]\n{content}")
             continue

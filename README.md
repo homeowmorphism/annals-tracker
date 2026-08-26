@@ -82,6 +82,16 @@ on its own; there is no separate seeding step.
 
 Subscribe the bot to every channel you add.
 
+## The 27th solve
+
+By request, the announcement that carries the 27th solve opens with an extra
+line in the **Formal Landmarks** channel, before the usual message:
+
+> I have stopped the count on special request. Nah just kidding, here's the 27th:
+
+`GAG_CHANNEL`, `GAG_POSITION` and `GAG` near the top of the script control
+it. Delete them and the two lines that use them once the joke has run.
+
 ## Starting a fresh tracker
 
 A new topic is caught up with the full table by itself, which is usually what
