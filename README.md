@@ -147,8 +147,9 @@ ANNALS_WORKDIR=$PWD python3 annals_zulip.py --dry-run
 That clones the submissions repo into `lean-eval-submissions/` here, which
 `.gitignore` already covers, and reads the committed `state.json`.
 
-The file records, per destination, the issue number announced for each
-problem.
+The file records, per destination, what was announced for each problem:
+the GitHub issue number for a solve submitted by issue, or the submission id
+for one that came through the LeanEval submission service.
 
 Renaming a channel or topic produces a new key, and the renamed topic then
 gets the full table again. Rename its key in `state.json` in the same commit

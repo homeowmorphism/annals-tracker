@@ -87,7 +87,8 @@ def name(dest):
 
 
 def read_state(path, primary):
-    """Announced issue numbers per destination: {"channel > topic": {problem: issue}}."""
+    """Announced solves per destination: {"channel > topic": {problem: ref}},
+    where ref is the solve's issue number or submission id."""
     if not path.exists():
         return {}
     state = json.loads(path.read_text())
@@ -128,36 +129,61 @@ class Unsupported(Exception):
     """A results file the parser doesn't understand yet."""
 
 
-def records(data):
-    """Every submission in a results file as (pid, solved_at, issue, model).
+def source_url(submission):
+    """Where a v2 submission's source can be read, or None while it is private."""
+    if not submission["public"]:
+        return None
+    host = "gist.github.com" if submission["kind"] == "gist" else "github.com"
+    path = "" if submission["kind"] == "gist" else "/tree"
+    return f"https://{host}/{submission['repo']}{path}/{submission['ref']}"
 
-    Upstream is migrating from schema 1 (per-model nesting) to schema 2 (flat
-    append-only list, docs/results-schema-v2.md there); readers must accept
-    both. Raises Unsupported for any other version, and for a v2 server
-    intake of an AnnalsChallenge problem, which has no issue number to link
-    or tie-break with.
+
+def records(data):
+    """Every submission in a results file as a dict.
+
+    Keys: pid, solved_at, model, and how the submission came in: issue (a
+    GitHub issue number, or None) and submission_id (the submission
+    service's UUIDv7, or None), exactly one of which is set; ref is whichever
+    it is, and source is a URL for the accepted source when it is public.
+
+    Upstream moved from schema 1 (per-model nesting, GitHub-issue intake
+    only) to schema 2 (flat append-only list, docs/results-schema-v2.md
+    there), whose intake is either an issue or the submission service.
+    Raises Unsupported for any other version or intake kind.
     """
     v = data.get("schema_version")
     if v == 1:
         for model, probs in data["solved"].items():
             for pid, rec in probs.items():
-                yield pid, rec["solved_at"], rec["issue_number"], model
+                yield {"pid": pid, "solved_at": rec["solved_at"], "model": model,
+                       "issue": rec["issue_number"], "submission_id": None,
+                       "ref": rec["issue_number"], "source": None}
     elif v == 2:
         for rec in data["results"]:
-            pid = rec["problem_id"]
-            issue = rec["intake"].get("issue_number")
-            if issue is None:
-                if target(pid) is None:
-                    continue
-                raise Unsupported(f"{pid} has no issue number ({rec['intake']['kind']} intake)")
-            yield pid, rec["accepted_at"], issue, rec["declared_model"]
+            intake = rec["intake"]
+            if intake["kind"] == "issue":
+                issue, sid = intake["issue_number"], None
+            elif intake["kind"] == "server":
+                issue, sid = None, intake["submission_id"]
+            else:
+                raise Unsupported(f"{rec['problem_id']}: unknown intake kind {intake['kind']!r}")
+            yield {"pid": rec["problem_id"], "solved_at": rec["accepted_at"],
+                   "model": rec["declared_model"], "issue": issue, "submission_id": sid,
+                   "ref": issue if sid is None else sid, "source": source_url(rec["submission"])}
     else:
         raise Unsupported(f"unexpected schema_version {v}")
 
 
+def order_key(rec):
+    """Sort key for solves: earliest first; at the same instant, issue
+    intakes by issue number, then service intakes by submission id (a
+    UUIDv7, so also chronological)."""
+    return rec["solved_at"], rec["issue"] is None, rec["ref"]
+
+
 def first_solves(repo: Path):
-    """Earliest accepted submission per AnnalsChallenge target, ties broken by
-    issue number, plus the files the parser had to skip.
+    """Earliest accepted submission per AnnalsChallenge target (see order_key
+    for tie-breaking), plus the files the parser had to skip.
 
     A skipped file may hold an unseen first solve, so on any skip the caller
     must withhold announcements rather than risk crowning the wrong solver.
@@ -170,19 +196,12 @@ def first_solves(repo: Path):
         except Unsupported as e:
             skipped.append(f"{f.name}: {e}")
             continue
-        for pid, solved_at, issue, model in recs:
-            t = target(pid)
+        for rec in recs:
+            t = target(rec["pid"])
             if t is None:
                 continue
-            key = (solved_at, issue)
-            if t not in best or key < (best[t]["solved_at"], best[t]["issue"]):
-                best[t] = {
-                    "solved_at": solved_at,
-                    "issue": issue,
-                    "model": model,
-                    "user": data["user"],
-                    "pid": pid,
-                }
+            if t not in best or order_key(rec) < order_key(best[t]):
+                best[t] = {**rec, "user": data["user"]}
     return best, skipped
 
 
@@ -198,8 +217,15 @@ def annals_total():
 
 def line(n, t, rec):
     via = f" (via `{rec['pid']}`)" if rec["pid"] != t else ""
+    if rec["issue"] is not None:
+        where = f"[#{rec['issue']}]({ISSUES}/{rec['issue']})"
+    else:
+        # Submission-service intake: no issue to point at, so point at the
+        # accepted source if it is public, as the leaderboard does.
+        label = f"submission {rec['submission_id'][:8]}"
+        where = f"[{label}]({rec['source']})" if rec["source"] else f"{label} (source private)"
     return (
-        f"{n}. `{t}`{via}: [#{rec['issue']}]({ISSUES}/{rec['issue']})"
+        f"{n}. `{t}`{via}: {where}"
         f" — {rec['model']} ({rec['user']}), {rec['solved_at'].replace('T', ' ').replace('Z', ' UTC')}"
     )
 
@@ -259,7 +285,7 @@ def main():
 
     if args.mark_announced:
         for d in dests:
-            state[name(d)] = {p: solves[p]["issue"] for p in solves}
+            state[name(d)] = {p: solves[p]["ref"] for p in solves}
         state_path.write_text(json.dumps(state, indent=1, sort_keys=True))
         print(f"marked {len(solves)} solves as announced for {len(dests)} destination(s); nothing posted")
         return
@@ -268,7 +294,7 @@ def main():
     denom = f"/{total}" if total else ""
     # Number by position in the overall solve order, so an announcement of the
     # 15th solve says 15 rather than restarting at 1.
-    order = sorted(solves, key=lambda p: (solves[p]["solved_at"], solves[p]["issue"]))
+    order = sorted(solves, key=lambda p: order_key(solves[p]))
     position = {p: i for i, p in enumerate(order, 1)}
 
     posted = False
@@ -297,7 +323,7 @@ def main():
             print(f"[{name(d)}]\n{content}")
             continue
         post(content, *d)
-        state[name(d)] = {**(announced or {}), **{p: rows[p]["issue"] for p in rows}}
+        state[name(d)] = {**(announced or {}), **{p: rows[p]["ref"] for p in rows}}
         posted = True
         print(f"posted {len(rows)} solve(s) to {name(d)}")
     if posted:
