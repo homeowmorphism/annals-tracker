@@ -67,6 +67,7 @@
   "annals_unit_conjecture": 1085
  },
  "skipped alert": [
+  "skidanovalex.json: annals_unit_conjecture has no issue number (server intake)",
   "xiaoyangliu-sjtu.json: annals_unit_conjecture has no issue number (server intake)"
  ]
 }
